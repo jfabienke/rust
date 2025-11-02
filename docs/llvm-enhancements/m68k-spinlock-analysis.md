@@ -191,36 +191,34 @@ spinlock_release:
 use core::arch::asm;
 
 /// Atomic test-and-set primitive using M68k TAS instruction
+/// CRITICAL: TAS sets CCR flags, use SMI to capture state
 #[inline(always)]
-pub unsafe fn tas_lock(lock: *mut u8) -> bool {
-    let result: u8;
+pub unsafe fn spin_try_lock(lock: *mut u8) -> bool {
+    let mut was_set: u8;
     asm!(
-        "tas.b ({0})",
-        in(reg) lock,
-        lateout("d0") result,
+        "tas.b ({addr})",     // atomically set bit7
+        "smi {out}",          // out = 0xFF if bit7 was 1 before TAS, else 0x00
+        addr = in(reg) lock,
+        out = lateout(reg_data) was_set,
         options(nostack)
     );
-    result & 0x80 == 0  // Returns true if lock was acquired (bit 7 was clear)
+    was_set == 0  // success if bit7 was previously 0
 }
 
 /// Spinlock acquire using TAS
 #[inline]
-pub fn spinlock_acquire(lock: &mut u8) {
-    let lock_ptr = lock as *mut u8;
-    unsafe {
-        while !tas_lock(lock_ptr) {
-            // Optional: CPU yield hint (not available on M68k)
-            core::hint::spin_loop();
-        }
+pub fn spin_lock(lock: &mut u8) {
+    while !unsafe { spin_try_lock(lock as *mut u8) } {
+        core::hint::spin_loop();
     }
 }
 
 /// Spinlock release (simple clear)
 #[inline]
-pub fn spinlock_release(lock: &mut u8) {
-    *lock = 0;  // Clear lock byte
-    // Memory fence (compiler barrier)
-    core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+pub fn spin_unlock(lock: &mut u8) {
+    // clear bit7; use a normal store
+    unsafe { core::ptr::write_volatile(lock, 0); }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
 }
 ```
 
@@ -230,15 +228,51 @@ static mut SPINLOCK: u8 = 0;
 
 fn protected_operation() {
     unsafe {
-        spinlock_acquire(&mut SPINLOCK);
+        spin_lock(&mut SPINLOCK);
 
         // Critical section
         // ...
 
-        spinlock_release(&mut SPINLOCK);
+        spin_unlock(&mut SPINLOCK);
     }
 }
 ```
+
+### CRITICAL: TAS ≠ Atomic Swap
+
+**IMPORTANT**: TAS and atomic swap (`atomicrmw xchg`) are **fundamentally different operations** and must NOT be conflated.
+
+**TAS Operation**: Test-and-Set **bit 7 only**
+- Reads byte from memory
+- Sets condition codes (N/Z) based on original value
+- Forces bit 7 to `1`, **leaves bits 6-0 untouched**
+- Writes modified byte back atomically
+- **Does NOT return the original value in a register**
+
+**Atomic Swap Operation**: Replace **entire byte**
+- Reads byte from memory
+- Writes new **arbitrary value**
+- Returns original value atomically
+
+**These are NOT equivalent.** Lowering `atomicrmw xchg` to TAS would corrupt data.
+
+**Example Failure**:
+```rust
+// Programmer expects to swap entire byte value
+let old = atomic_u8.swap(5);  // Expects memory = 5
+
+// If incorrectly lowered to TAS:
+// - Memory becomes 0x80 (128), NOT 5
+// - Value 5 is completely ignored
+// - This is bit manipulation, not value replacement
+// - Result: DATA CORRUPTION
+```
+
+**Correct Implementation**:
+- **TAS**: Use ONLY for byte-flag spinlocks that explicitly use bit 7 as a lock flag
+- **Atomic Swap**: Use CAS-loop (020/030/040) or libcall (000/010/060), NEVER TAS
+
+**Why the Confusion?**: The name "Test-And-Set" might suggest it's equivalent to a swap operation, but it's actually "Test-And-Set-**Bit-7**". The operation was designed specifically for simple binary semaphores where bit 7 serves as the lock flag.
 
 ### Option B: Rust Atomic Wrapper (Future Work)
 
