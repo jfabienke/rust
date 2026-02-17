@@ -25,7 +25,10 @@
 pub mod common;
 
 cfg_if::cfg_if! {
-    if #[cfg(unix)] {
+    if #[cfg(target_os = "nextstep")] {
+        mod nextstep;
+        pub use self::nextstep::*;
+    } else if #[cfg(unix)] {
         mod unix;
         pub use self::unix::*;
     } else if #[cfg(windows)] {
