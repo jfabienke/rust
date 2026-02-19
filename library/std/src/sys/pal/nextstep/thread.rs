@@ -5,11 +5,12 @@
 
 use crate::ffi::CStr;
 use crate::io;
+use crate::num::NonZero;
 use crate::ptr;
 use crate::time::Duration;
 
 use nextstep_sys::{
-    kern_return_t, mach_port_t, vm_address_t, vm_size_t,
+    mach_port_t, vm_address_t, vm_size_t,
     mach_task_self, mach_thread_self,
     thread_create, thread_resume, thread_suspend, thread_terminate, thread_switch,
     thread_set_state,
@@ -38,11 +39,16 @@ pub struct Thread {
     stack_size: u32,
 }
 
-const DEFAULT_STACK_SIZE: usize = 2 * 1024 * 1024; // 2 MB
+pub const DEFAULT_MIN_STACK_SIZE: usize = 2 * 1024 * 1024; // 2 MiB
+
+pub fn available_parallelism() -> io::Result<NonZero<usize>> {
+    // NeXTcube/NeXTstation are uniprocessor m68k systems
+    Ok(unsafe { NonZero::new_unchecked(1) })
+}
 
 impl Thread {
     pub unsafe fn new(stack: usize, p: Box<dyn FnOnce()>) -> io::Result<Thread> {
-        let stack_size = if stack == 0 { DEFAULT_STACK_SIZE } else { stack };
+        let stack_size = if stack == 0 { DEFAULT_MIN_STACK_SIZE } else { stack };
         let task = mach_task_self();
 
         // --- Allocate the Mach reply port for join() ---
@@ -79,9 +85,9 @@ impl Thread {
         // m68k C ABI: arguments are on the stack, then return address.
         // Push argument (payload thin pointer) then dummy return address.
         sp -= 4;
-        ptr::write(sp as *mut u32, p_ptr);       // first argument
+        ptr::write(ptr::with_exposed_provenance_mut::<u32>(sp as usize), p_ptr);
         sp -= 4;
-        ptr::write(sp as *mut u32, 0u32);         // dummy return address
+        ptr::write(ptr::with_exposed_provenance_mut::<u32>(sp as usize), 0u32);
 
         state.aregs[7] = sp;                              // A7 = stack pointer
         state.pc       = thread_trampoline as u32;        // entry point
@@ -178,7 +184,9 @@ impl Thread {
 extern "C" fn thread_trampoline(payload_ptr: u32) -> ! {
     unsafe {
         // Reconstruct ownership of the ThreadPayload Box
-        let payload    = Box::from_raw(payload_ptr as *mut ThreadPayload);
+        let payload = Box::from_raw(
+            ptr::with_exposed_provenance_mut::<ThreadPayload>(payload_ptr as usize),
+        );
         let reply_port = payload.reply_port;
 
         // Execute the user closure

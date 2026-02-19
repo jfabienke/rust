@@ -181,6 +181,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nextstep-atomics"
+version = "0.1.0"
+dependencies = [
+ "compiler_builtins",
+ "rustc-std-workspace-core",
+]
+
+[[package]]
+name = "nextstep-sys"
+version = "0.1.0"
+dependencies = [
+ "compiler_builtins",
+ "rustc-std-workspace-core",
+]
+
+[[package]]
 name = "object"
 version = "0.36.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -349,6 +365,8 @@ dependencies = [
  "hermit-abi",
  "libc",
  "miniz_oxide",
+ "nextstep-atomics",
+ "nextstep-sys",
  "object",
  "panic_abort",
  "panic_unwind",

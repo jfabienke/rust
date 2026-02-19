@@ -10,16 +10,16 @@ pub(crate) fn target() -> Target {
             std: Some(false),
         },
         pointer_width: 32,
-        data_layout: "E-m:e-p:32:32-i64:64-n8:16:32".into(),
+        data_layout: "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16".into(),
         arch: "m68k".into(),
-        
+
         options: TargetOptions {
             endian: crate::spec::Endian::Big,
             c_int_width: "32".into(),
-            cpu: "m68040".into(),
-            features: "+m68040".into(),
-            max_atomic_width: None, // LLVM M68k backend lacks all atomic lowering support
-            atomic_cas: false, // Hardware has CAS but LLVM backend cannot lower atomics
+            cpu: "M68040".into(),
+            features: "+isa-68040".into(),
+            max_atomic_width: Some(32), // M68k 68020+ MOVE is tear-free; CAS8/16/32 available
+            atomic_cas: true, // CAS supported via M68020+ CAS instruction in LLVM backend
             panic_strategy: crate::spec::PanicStrategy::Abort,
             linker_flavor: LinkerFlavor::Unix(Cc::Yes),
             linker: Some("clang".into()),
@@ -40,7 +40,7 @@ pub(crate) fn target() -> Target {
             position_independent_executables: false,
             static_position_independent_executables: false,
             relro_level: crate::spec::RelroLevel::None,
-            code_model: Some(crate::spec::CodeModel::Large),
+            code_model: Some(crate::spec::CodeModel::Medium),
             ..Default::default()
         },
     }
