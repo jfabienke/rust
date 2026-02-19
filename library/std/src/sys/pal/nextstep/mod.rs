@@ -16,18 +16,16 @@ extern crate nextstep_atomics;
 pub mod alloc;
 pub mod thread;
 
-// Delegate to unsupported stubs for unimplemented modules
-#[path = "../unsupported/args.rs"]    pub mod args;
-#[path = "../unsupported/env.rs"]     pub mod env;
-#[path = "../unsupported/fs.rs"]      pub mod fs;
-#[path = "../unsupported/pipe.rs"]    pub mod pipe;
-#[path = "../unsupported/stdio.rs"]   pub mod stdio;
-#[path = "../unsupported/os.rs"]      pub mod os;
-#[path = "../unsupported/process.rs"] pub mod process;
-#[path = "../unsupported/time.rs"]    pub mod time;
+// NeXTSTEP-specific implementations
+pub mod stdio;
+pub mod args;
+pub mod env;
+pub mod time;
+pub mod os;
+pub mod fs;
+pub mod pipe;
+pub mod process;
 
-// Stubs for unsupported features
-#[path = "../unsupported/common.rs"]
 #[deny(unsafe_op_in_unsafe_fn)]
 mod common;
 pub use common::*;
