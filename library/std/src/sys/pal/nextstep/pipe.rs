@@ -31,7 +31,7 @@ impl AnonPipe {
     }
 
     pub fn read_buf(&self, mut cursor: BorrowedCursor<'_>) -> io::Result<()> {
-        let buf = cursor.ensure_init();
+        let buf = cursor.ensure_init().init_mut();
         let n = self.read(buf)?;
         unsafe { cursor.advance_unchecked(n) };
         Ok(())

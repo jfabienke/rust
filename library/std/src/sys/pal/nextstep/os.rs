@@ -7,7 +7,6 @@ use crate::error::Error as StdError;
 use crate::ffi::{CStr, OsStr, OsString};
 use crate::fmt;
 use crate::io;
-use crate::marker::PhantomData;
 use crate::os::raw::c_char;
 use crate::path::{self, PathBuf};
 use crate::vec;
@@ -23,7 +22,7 @@ pub fn getcwd() -> io::Result<PathBuf> {
     } else {
         let len = unsafe { CStr::from_ptr(ptr as *const c_char) }.to_bytes().len();
         buf.truncate(len);
-        Ok(PathBuf::from(OsString::from_encoded_bytes_unchecked(buf)))
+        Ok(PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(buf) }))
     }
 }
 
@@ -116,7 +115,7 @@ pub fn getenv(key: &OsStr) -> Option<OsString> {
         None
     } else {
         let cstr = unsafe { CStr::from_ptr(ptr as *const c_char) };
-        Some(OsString::from_encoded_bytes_unchecked(cstr.to_bytes().to_vec()))
+        Some(unsafe { OsString::from_encoded_bytes_unchecked(cstr.to_bytes().to_vec()) })
     }
 }
 
@@ -167,7 +166,7 @@ pub fn split_paths(unparsed: &OsStr) -> SplitPaths<'_> {
 impl<'a> Iterator for SplitPaths<'a> {
     type Item = PathBuf;
     fn next(&mut self) -> Option<PathBuf> {
-        self.iter.next().map(|s| PathBuf::from(OsString::from_encoded_bytes_unchecked(s.as_bytes().to_vec())))
+        self.iter.next().map(|s| PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(s.as_bytes().to_vec()) }))
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.iter.size_hint()
@@ -193,7 +192,7 @@ where
         }
         joined.extend_from_slice(bytes);
     }
-    Ok(OsString::from_encoded_bytes_unchecked(joined))
+    Ok(unsafe { OsString::from_encoded_bytes_unchecked(joined) })
 }
 
 impl fmt::Display for JoinPathsError {

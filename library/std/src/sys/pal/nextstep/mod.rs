@@ -3,7 +3,7 @@
 //! This module provides the system-specific implementations for the standard library
 //! on NeXTSTEP 3.3 (m68k).
 
-#![allow(missing_docs, nonstandard_style)]
+#![allow(missing_docs, nonstandard_style, dead_code)]
 
 // =========================================================================
 // THE ATOMIC HANDSHAKE

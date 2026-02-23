@@ -23,7 +23,7 @@ pub fn args() -> Args {
             }
             let cstr = unsafe { CStr::from_ptr(ptr as *const c_char) };
             // SAFETY: NeXTSTEP argv entries are byte strings; treat as OsString.
-            let os = OsString::from_encoded_bytes_unchecked(cstr.to_bytes().to_vec());
+            let os = unsafe { OsString::from_encoded_bytes_unchecked(cstr.to_bytes().to_vec()) };
             v.push(os);
         }
     }

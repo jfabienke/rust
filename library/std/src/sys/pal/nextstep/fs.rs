@@ -4,13 +4,13 @@
 //! nextstep_sys open() flags. FileAttr wraps nextstep_sys::stat.
 //! ReadDir uses BSD getdirentries().
 
-use crate::ffi::{CStr, OsStr, OsString};
+use crate::ffi::OsString;
 use crate::fmt;
 use crate::io::{self, BorrowedCursor, IoSlice, IoSliceMut, SeekFrom};
-use crate::os::raw::c_char;
 use crate::path::{Path, PathBuf};
 use crate::sync::Arc;
 
+use super::time::SystemTime;
 use nextstep_sys as sys;
 
 fn cstr_from_path(p: &Path) -> io::Result<alloc::ffi::CString> {
@@ -126,7 +126,7 @@ impl File {
     }
 
     pub fn read_buf(&self, mut cursor: BorrowedCursor<'_>) -> io::Result<()> {
-        let buf = cursor.ensure_init();
+        let buf = cursor.ensure_init().init_mut();
         let n = self.read(buf)?;
         unsafe { cursor.advance_unchecked(n) };
         Ok(())
@@ -214,17 +214,19 @@ impl FileAttr {
         FileType { mode: self.0.st_mode }
     }
 
-    pub fn modified(&self) -> io::Result<crate::time::SystemTime> {
-        Ok(crate::time::SystemTime::UNIX_EPOCH
-            + crate::time::Duration::from_secs(self.0.st_mtime as u64))
+    pub fn modified(&self) -> io::Result<SystemTime> {
+        Ok(super::time::UNIX_EPOCH
+            .checked_add_duration(&crate::time::Duration::from_secs(self.0.st_mtime as u64))
+            .unwrap())
     }
 
-    pub fn accessed(&self) -> io::Result<crate::time::SystemTime> {
-        Ok(crate::time::SystemTime::UNIX_EPOCH
-            + crate::time::Duration::from_secs(self.0.st_atime as u64))
+    pub fn accessed(&self) -> io::Result<SystemTime> {
+        Ok(super::time::UNIX_EPOCH
+            .checked_add_duration(&crate::time::Duration::from_secs(self.0.st_atime as u64))
+            .unwrap())
     }
 
-    pub fn created(&self) -> io::Result<crate::time::SystemTime> {
+    pub fn created(&self) -> io::Result<SystemTime> {
         // NeXTSTEP stat doesn't have a birth time field
         super::common::unsupported()
     }
@@ -362,12 +364,12 @@ impl OpenOptions {
 // FileTimes
 // =========================================================================
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct FileTimes {}
 
 impl FileTimes {
-    pub fn set_accessed(&mut self, _t: crate::time::SystemTime) {}
-    pub fn set_modified(&mut self, _t: crate::time::SystemTime) {}
+    pub fn set_accessed(&mut self, _t: SystemTime) {}
+    pub fn set_modified(&mut self, _t: SystemTime) {}
 }
 
 // =========================================================================
@@ -450,7 +452,7 @@ impl Iterator for ReadDir {
                 continue;
             }
 
-            let name = OsString::from_encoded_bytes_unchecked(name_bytes.to_vec());
+            let name = unsafe { OsString::from_encoded_bytes_unchecked(name_bytes.to_vec()) };
             return Some(Ok(DirEntry {
                 name,
                 file_type: None,
@@ -490,6 +492,7 @@ impl DirEntry {
 // DirBuilder
 // =========================================================================
 
+#[derive(Debug)]
 pub struct DirBuilder {
     mode: sys::mode_t,
 }
@@ -588,7 +591,7 @@ pub fn readlink(p: &Path) -> io::Result<PathBuf> {
         sys::readlink(cpath.as_ptr() as *const u8, buf.as_mut_ptr(), buf.len())
     })?;
     buf.truncate(ret as usize);
-    Ok(PathBuf::from(OsString::from_encoded_bytes_unchecked(buf)))
+    Ok(PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(buf) }))
 }
 
 pub fn symlink(original: &Path, link: &Path) -> io::Result<()> {
