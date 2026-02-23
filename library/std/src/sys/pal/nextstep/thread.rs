@@ -192,6 +192,10 @@ extern "C" fn thread_trampoline(payload_ptr: u32) -> ! {
         // Execute the user closure
         (payload.closure)();
 
+        // Run TLS destructors and free the per-thread TLS table.
+        // This also triggers thread_cleanup() via the guard/key mechanism.
+        crate::sys::thread_local::key::run_dtors();
+
         // --- Notify parent that we have finished ---
         let hdr_size = core::mem::size_of::<msg_header_t>() as u32;
         let mut msg: msg_header_t = core::mem::zeroed();

@@ -14,6 +14,7 @@
 extern crate nextstep_atomics;
 
 pub mod alloc;
+pub mod sync;
 pub mod thread;
 
 // NeXTSTEP-specific implementations
