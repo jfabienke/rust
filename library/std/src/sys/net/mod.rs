@@ -30,6 +30,11 @@ cfg_if::cfg_if! {
             mod uefi;
             pub use uefi::*;
         }
+    } else if #[cfg(target_os = "nextstep")] {
+        mod connection {
+            mod nextstep;
+            pub use nextstep::*;
+        }
     } else {
         mod connection {
             mod unsupported;
