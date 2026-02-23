@@ -36,7 +36,7 @@ impl File {
         Ok(File { fd })
     }
 
-    fn raw_fd(&self) -> i32 {
+    pub fn raw_fd(&self) -> i32 {
         self.fd
     }
 
@@ -397,8 +397,9 @@ impl Drop for ReadDirInner {
 
 pub struct DirEntry {
     name: OsString,
+    ino: u64,
     file_type: Option<FileType>,
-    root: Arc<ReadDirInner>,
+    root: PathBuf,
 }
 
 impl fmt::Debug for ReadDir {
@@ -453,10 +454,12 @@ impl Iterator for ReadDir {
             }
 
             let name = unsafe { OsString::from_encoded_bytes_unchecked(name_bytes.to_vec()) };
+            let ino = de.d_ino as u64;
             return Some(Ok(DirEntry {
                 name,
+                ino,
                 file_type: None,
-                root: self.inner.clone(),
+                root: inner.root.clone(),
             }));
         }
     }
@@ -464,7 +467,7 @@ impl Iterator for ReadDir {
 
 impl DirEntry {
     pub fn path(&self) -> PathBuf {
-        self.root.root.join(&self.name)
+        self.root.join(&self.name)
     }
 
     pub fn file_name(&self) -> OsString {
@@ -484,7 +487,7 @@ impl DirEntry {
     }
 
     pub fn ino(&self) -> u64 {
-        0 // Would need to read from dirent, but type changes per entry
+        self.ino
     }
 }
 
@@ -627,7 +630,10 @@ pub fn lstat(p: &Path) -> io::Result<FileAttr> {
 }
 
 pub fn canonicalize(p: &Path) -> io::Result<PathBuf> {
-    // No realpath on NeXTSTEP; do a minimal normalization
+    // No realpath on NeXTSTEP; do a minimal normalization.
+    // NOTE: This does NOT resolve symlinks along the path — would require
+    // iterating each component with readlink(), which is complex. Acceptable
+    // for now since symlinks are rare on NeXTSTEP deployments.
     let abs = if p.is_absolute() {
         p.to_path_buf()
     } else {
@@ -656,7 +662,10 @@ pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {
         if n == 0 {
             break;
         }
-        writer.write(&buf[..n])?;
+        let mut written = 0;
+        while written < n {
+            written += writer.write(&buf[written..n])?;
+        }
         total += n as u64;
     }
     Ok(total)

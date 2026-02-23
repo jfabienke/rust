@@ -133,7 +133,7 @@ impl Command {
 
     pub fn spawn(
         &mut self,
-        _default: Stdio,
+        default: Stdio,
         _needs_stdin: bool,
     ) -> io::Result<(Process, StdioPipes)> {
         // Build null-terminated C strings for argv
@@ -146,22 +146,138 @@ impl Command {
         let mut argv_ptrs: Vec<*const u8> = c_args.iter().map(|c| c.as_ptr() as *const u8).collect();
         argv_ptrs.push(core::ptr::null());
 
-        // Build envp from current environment (we don't modify env for now)
-        let envp = unsafe { sys::environ as *const *const u8 };
-
         let program = alloc::ffi::CString::new(self.program.as_encoded_bytes())
             .map_err(|_| io::Error::from_raw_os_error(sys::EINVAL))?;
 
+        // Pre-open /dev/null if any stdio is Null
+        let devnull_path = b"/dev/null\0";
+
+        // --- Create pipes for MakePipe stdio ---
+        // Each pipe: [0] = read end, [1] = write end
+        let mut stdin_pipe: [i32; 2] = [-1, -1];
+        let mut stdout_pipe: [i32; 2] = [-1, -1];
+        let mut stderr_pipe: [i32; 2] = [-1, -1];
+
+        let stdin_cfg = self.stdin.as_ref().unwrap_or(&default);
+        let stdout_cfg = self.stdout.as_ref().unwrap_or(&default);
+        let stderr_cfg = self.stderr.as_ref().unwrap_or(&default);
+
+        if matches!(stdin_cfg, Stdio::MakePipe) {
+            if unsafe { sys::pipe(stdin_pipe.as_mut_ptr()) } < 0 {
+                return Err(io::Error::from_raw_os_error(super::common::errno()));
+            }
+        }
+        if matches!(stdout_cfg, Stdio::MakePipe) {
+            if unsafe { sys::pipe(stdout_pipe.as_mut_ptr()) } < 0 {
+                close_if_valid(stdin_pipe[0]); close_if_valid(stdin_pipe[1]);
+                return Err(io::Error::from_raw_os_error(super::common::errno()));
+            }
+        }
+        if matches!(stderr_cfg, Stdio::MakePipe) {
+            if unsafe { sys::pipe(stderr_pipe.as_mut_ptr()) } < 0 {
+                close_if_valid(stdin_pipe[0]); close_if_valid(stdin_pipe[1]);
+                close_if_valid(stdout_pipe[0]); close_if_valid(stdout_pipe[1]);
+                return Err(io::Error::from_raw_os_error(super::common::errno()));
+            }
+        }
+
+        // --- Build envp ---
+        // If the user modified the environment, build a custom envp array.
+        // Otherwise, inherit the parent's environ.
+        // We hold the CStrings and pointer vec in `_env_storage` to keep them alive.
+        let _env_storage: Option<(Vec<alloc::ffi::CString>, Vec<*const u8>)>;
+        let envp: *const *const u8;
+
+        if self.env.is_unchanged() {
+            _env_storage = None;
+            envp = unsafe { sys::environ as *const *const u8 };
+        } else {
+            let cstrings: Vec<alloc::ffi::CString> = self.env.capture()
+                .into_iter()
+                .map(|(k, v)| {
+                    let mut entry = k.as_encoded_bytes().to_vec();
+                    entry.push(b'=');
+                    entry.extend_from_slice(v.as_encoded_bytes());
+                    alloc::ffi::CString::new(entry).unwrap()
+                })
+                .collect();
+            let mut ptrs: Vec<*const u8> = cstrings.iter().map(|c| c.as_ptr() as *const u8).collect();
+            ptrs.push(core::ptr::null());
+            envp = ptrs.as_ptr();
+            _env_storage = Some((cstrings, ptrs));
+        }
+
         let pid = unsafe { sys::fork() };
         if pid < 0 {
+            // Fork failed — clean up pipes
+            close_if_valid(stdin_pipe[0]); close_if_valid(stdin_pipe[1]);
+            close_if_valid(stdout_pipe[0]); close_if_valid(stdout_pipe[1]);
+            close_if_valid(stderr_pipe[0]); close_if_valid(stderr_pipe[1]);
             return Err(io::Error::from_raw_os_error(super::common::errno()));
         }
 
         if pid == 0 {
-            // Child process
+            // ===== Child process =====
+
+            // Set up stdin
+            match self.stdin.as_ref().unwrap_or(&default) {
+                Stdio::MakePipe => {
+                    unsafe { sys::dup2(stdin_pipe[0], 0); sys::close(stdin_pipe[0]); sys::close(stdin_pipe[1]); }
+                }
+                Stdio::Null => {
+                    let fd = unsafe { sys::open(devnull_path.as_ptr(), sys::O_RDONLY, 0u16) };
+                    if fd >= 0 { unsafe { sys::dup2(fd, 0); sys::close(fd); } }
+                }
+                Stdio::InheritFile(ref f) => {
+                    unsafe { sys::dup2(f.raw_fd(), 0); }
+                }
+                Stdio::Inherit | Stdio::ParentStdout | Stdio::ParentStderr => { /* keep fd 0 */ }
+            }
+
+            // Set up stdout
+            match self.stdout.as_ref().unwrap_or(&default) {
+                Stdio::MakePipe => {
+                    unsafe { sys::dup2(stdout_pipe[1], 1); sys::close(stdout_pipe[0]); sys::close(stdout_pipe[1]); }
+                }
+                Stdio::Null => {
+                    let fd = unsafe { sys::open(devnull_path.as_ptr(), sys::O_WRONLY, 0u16) };
+                    if fd >= 0 { unsafe { sys::dup2(fd, 1); sys::close(fd); } }
+                }
+                Stdio::ParentStdout => { /* already fd 1 */ }
+                Stdio::ParentStderr => {
+                    unsafe { sys::dup2(2, 1); }
+                }
+                Stdio::InheritFile(ref f) => {
+                    unsafe { sys::dup2(f.raw_fd(), 1); }
+                }
+                Stdio::Inherit => { /* keep fd 1 */ }
+            }
+
+            // Set up stderr
+            match self.stderr.as_ref().unwrap_or(&default) {
+                Stdio::MakePipe => {
+                    unsafe { sys::dup2(stderr_pipe[1], 2); sys::close(stderr_pipe[0]); sys::close(stderr_pipe[1]); }
+                }
+                Stdio::Null => {
+                    let fd = unsafe { sys::open(devnull_path.as_ptr(), sys::O_WRONLY, 0u16) };
+                    if fd >= 0 { unsafe { sys::dup2(fd, 2); sys::close(fd); } }
+                }
+                Stdio::ParentStdout => {
+                    unsafe { sys::dup2(1, 2); }
+                }
+                Stdio::ParentStderr => { /* already fd 2 */ }
+                Stdio::InheritFile(ref f) => {
+                    unsafe { sys::dup2(f.raw_fd(), 2); }
+                }
+                Stdio::Inherit => { /* keep fd 2 */ }
+            }
+
+            // Change directory if requested — exit on failure
             if let Some(ref dir) = self.cwd {
                 let cdir = alloc::ffi::CString::new(dir.as_encoded_bytes()).unwrap();
-                unsafe { sys::chdir(cdir.as_ptr() as *const u8) };
+                if unsafe { sys::chdir(cdir.as_ptr() as *const u8) } != 0 {
+                    unsafe { sys::_exit(127) };
+                }
             }
 
             unsafe {
@@ -175,21 +291,51 @@ impl Command {
             unsafe { sys::_exit(127) };
         }
 
-        // Parent process
-        Ok((
-            Process { pid },
-            StdioPipes {
-                stdin: None,
-                stdout: None,
-                stderr: None,
-            },
-        ))
+        // ===== Parent process =====
+
+        // Close child-side pipe ends, keep parent-side ends
+        let mut pipes = StdioPipes { stdin: None, stdout: None, stderr: None };
+
+        if stdin_pipe[0] >= 0 {
+            unsafe { sys::close(stdin_pipe[0]); }  // close read end (child's)
+            pipes.stdin = Some(AnonPipe::from_raw_fd(stdin_pipe[1]));  // parent writes
+        }
+        if stdout_pipe[1] >= 0 {
+            unsafe { sys::close(stdout_pipe[1]); }  // close write end (child's)
+            pipes.stdout = Some(AnonPipe::from_raw_fd(stdout_pipe[0]));  // parent reads
+        }
+        if stderr_pipe[1] >= 0 {
+            unsafe { sys::close(stderr_pipe[1]); }  // close write end (child's)
+            pipes.stderr = Some(AnonPipe::from_raw_fd(stderr_pipe[0]));  // parent reads
+        }
+
+        Ok((Process { pid }, pipes))
     }
 
     pub fn output(&mut self) -> io::Result<(ExitStatus, Vec<u8>, Vec<u8>)> {
-        let (proc, _pipes) = self.spawn(Stdio::MakePipe, false)?;
+        self.stdout(Stdio::MakePipe);
+        self.stderr(Stdio::MakePipe);
+        let (proc, pipes) = self.spawn(Stdio::MakePipe, false)?;
+
+        let mut stdout_data = Vec::new();
+        let mut stderr_data = Vec::new();
+
+        // Read stdout and stderr simultaneously using read2 if both are present
+        match (pipes.stdout, pipes.stderr) {
+            (Some(out_pipe), Some(err_pipe)) => {
+                super::pipe::read2(out_pipe, &mut stdout_data, err_pipe, &mut stderr_data)?;
+            }
+            (Some(out_pipe), None) => {
+                out_pipe.read_to_end(&mut stdout_data)?;
+            }
+            (None, Some(err_pipe)) => {
+                err_pipe.read_to_end(&mut stderr_data)?;
+            }
+            (None, None) => {}
+        }
+
         let status = proc.wait_internal()?;
-        Ok((status, Vec::new(), Vec::new()))
+        Ok((status, stdout_data, stderr_data))
     }
 }
 
@@ -380,6 +526,13 @@ impl<'a> ExactSizeIterator for CommandArgs<'a> {
 impl<'a> fmt::Debug for CommandArgs<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.iter.clone()).finish()
+    }
+}
+
+/// Close an fd if it is a valid (non-negative) descriptor.
+fn close_if_valid(fd: i32) {
+    if fd >= 0 {
+        unsafe { sys::close(fd); }
     }
 }
 

@@ -161,8 +161,8 @@ impl Thread {
             let hdr_size = core::mem::size_of::<msg_header_t>() as u32;
 
             let mut msg: msg_header_t = core::mem::zeroed();
-            msg.msg_bits       = hdr_size;        // receive buffer: size only
-            msg.msg_local_port = self.reply_port;
+            msg.msg_size       = hdr_size;         // max receive buffer size
+            msg.msg_local_port = self.reply_port;  // port to receive on
 
             // Block until the child sends the completion notification
             msg_receive(&mut msg as *mut _, MSG_OPTION_NONE, 0);
@@ -195,11 +195,11 @@ extern "C" fn thread_trampoline(payload_ptr: u32) -> ! {
         // --- Notify parent that we have finished ---
         let hdr_size = core::mem::size_of::<msg_header_t>() as u32;
         let mut msg: msg_header_t = core::mem::zeroed();
-        // bit 31 = msg_simple (1 = no OOL data), bits 0-30 = msg_size
-        msg.msg_bits        = (1u32 << 31) | hdr_size;
-        msg.msg_type        = MSG_TYPE_NORMAL;
-        msg.msg_local_port  = 0;
-        msg.msg_remote_port = reply_port;
+        msg.msg_unused_and_simple = 1;             // msg_simple = TRUE (low byte on big-endian)
+        msg.msg_size              = hdr_size;      // 24 bytes
+        msg.msg_type              = MSG_TYPE_NORMAL;
+        msg.msg_local_port        = 0;
+        msg.msg_remote_port       = reply_port;
 
         msg_send(&mut msg as *mut _, MSG_OPTION_NONE, 0);
 
