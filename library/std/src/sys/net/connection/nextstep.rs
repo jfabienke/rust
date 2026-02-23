@@ -314,7 +314,7 @@ impl TcpStream {
 
     pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
         cvt_ssize(unsafe {
-            sys::readv(self.fd, bufs.as_ptr() as *const c_void, bufs.len() as c_int)
+            sys::readv(self.fd, bufs.as_ptr() as *const sys::iovec, bufs.len() as c_int)
         }.try_into().unwrap_or(-1))
     }
 
@@ -330,7 +330,7 @@ impl TcpStream {
 
     pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
         cvt_ssize(unsafe {
-            sys::writev(self.fd, bufs.as_ptr() as *const c_void, bufs.len() as c_int)
+            sys::writev(self.fd, bufs.as_ptr() as *const sys::iovec, bufs.len() as c_int)
         }.try_into().unwrap_or(-1))
     }
 

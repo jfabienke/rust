@@ -4,9 +4,13 @@
 
 #[cfg(target_os = "hermit")]
 use hermit_abi as libc;
+#[cfg(target_os = "nextstep")]
+use nextstep_sys as libc;
 
 #[cfg(target_os = "hermit")]
 use crate::os::hermit::io::OwnedFd;
+#[cfg(target_os = "nextstep")]
+use crate::os::nextstep::io::OwnedFd;
 #[cfg(not(target_os = "hermit"))]
 use crate::os::raw;
 #[cfg(all(doc, not(target_arch = "wasm32")))]

@@ -13,6 +13,8 @@ mod raw;
 mod owned;
 
 // Implementations for `AsRawFd` etc. for network types.
+// NeXTSTEP networking types use flat fd wrappers (no Socket type).
+#[cfg(not(target_os = "nextstep"))]
 mod net;
 
 #[cfg(test)]

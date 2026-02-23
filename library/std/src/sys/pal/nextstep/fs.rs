@@ -7,8 +7,10 @@
 use crate::ffi::OsString;
 use crate::fmt;
 use crate::io::{self, BorrowedCursor, IoSlice, IoSliceMut, SeekFrom};
+use crate::os::fd::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd, AsFd};
 use crate::path::{Path, PathBuf};
 use crate::sync::Arc;
+use crate::sys_common::{AsInner, FromInner, IntoInner};
 
 use super::time::SystemTime;
 use nextstep_sys as sys;
@@ -192,6 +194,54 @@ impl Drop for File {
 impl fmt::Debug for File {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("File").field("fd", &self.fd).finish()
+    }
+}
+
+impl AsRawFd for File {
+    fn as_raw_fd(&self) -> RawFd {
+        self.fd
+    }
+}
+
+impl AsFd for File {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        unsafe { BorrowedFd::borrow_raw(self.fd) }
+    }
+}
+
+impl FromRawFd for File {
+    unsafe fn from_raw_fd(fd: RawFd) -> File {
+        File { fd }
+    }
+}
+
+impl IntoRawFd for File {
+    fn into_raw_fd(self) -> RawFd {
+        let fd = self.fd;
+        core::mem::forget(self); // prevent Drop from closing
+        fd
+    }
+}
+
+impl AsInner<OwnedFd> for File {
+    fn as_inner(&self) -> &OwnedFd {
+        // Safety: OwnedFd has the same repr as a raw fd (via ValidRawFd).
+        // We only hand out a borrow — no drop will fire on this reference.
+        unsafe { &*((&self.fd) as *const i32 as *const OwnedFd) }
+    }
+}
+
+impl IntoInner<OwnedFd> for File {
+    fn into_inner(self) -> OwnedFd {
+        let fd = self.fd;
+        core::mem::forget(self);
+        unsafe { OwnedFd::from_raw_fd(fd) }
+    }
+}
+
+impl FromInner<OwnedFd> for File {
+    fn from_inner(owned: OwnedFd) -> File {
+        File { fd: owned.into_raw_fd() }
     }
 }
 

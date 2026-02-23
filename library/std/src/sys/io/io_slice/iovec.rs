@@ -1,5 +1,7 @@
 #[cfg(target_os = "hermit")]
 use hermit_abi::iovec;
+#[cfg(target_os = "nextstep")]
+use nextstep_sys::iovec;
 #[cfg(target_family = "unix")]
 use libc::iovec;
 
