@@ -630,18 +630,71 @@ pub fn lstat(p: &Path) -> io::Result<FileAttr> {
 }
 
 pub fn canonicalize(p: &Path) -> io::Result<PathBuf> {
-    // No realpath on NeXTSTEP; do a minimal normalization.
-    // NOTE: This does NOT resolve symlinks along the path — would require
-    // iterating each component with readlink(), which is complex. Acceptable
-    // for now since symlinks are rare on NeXTSTEP deployments.
+    // Build an absolute path, then resolve each component, following symlinks.
     let abs = if p.is_absolute() {
         p.to_path_buf()
     } else {
         super::os::getcwd()?.join(p)
     };
-    // Verify it exists
-    stat(&abs)?;
-    Ok(abs)
+
+    let mut result = PathBuf::from("/");
+    let mut symlink_depth: u32 = 0;
+    const MAX_SYMLINKS: u32 = 40; // matches Linux MAXSYMLINKS
+
+    for component in abs.components() {
+        use crate::path::Component;
+        match component {
+            Component::RootDir => {
+                result = PathBuf::from("/");
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                result.pop();
+            }
+            Component::Normal(c) => {
+                result.push(c);
+                // Check if this component is a symlink
+                match lstat(&result) {
+                    Ok(attr) if attr.file_type().is_symlink() => {
+                        symlink_depth += 1;
+                        if symlink_depth > MAX_SYMLINKS {
+                            return Err(io::Error::from_raw_os_error(
+                                nextstep_sys::ELOOP,
+                            ));
+                        }
+                        let target = readlink(&result)?;
+                        result.pop(); // remove the symlink name
+                        if target.is_absolute() {
+                            result = PathBuf::from("/");
+                        }
+                        // Push target components through the same logic
+                        for tc in target.components() {
+                            match tc {
+                                Component::RootDir => {
+                                    result = PathBuf::from("/");
+                                }
+                                Component::CurDir => {}
+                                Component::ParentDir => {
+                                    result.pop();
+                                }
+                                Component::Normal(n) => {
+                                    result.push(n);
+                                }
+                                Component::Prefix(_) => {}
+                            }
+                        }
+                    }
+                    Ok(_) => {} // not a symlink, keep going
+                    Err(e) => return Err(e),
+                }
+            }
+            Component::Prefix(_) => {} // not applicable on NeXTSTEP
+        }
+    }
+
+    // Final verification: the resolved path must exist
+    stat(&result)?;
+    Ok(result)
 }
 
 pub fn copy(from: &Path, to: &Path) -> io::Result<u64> {

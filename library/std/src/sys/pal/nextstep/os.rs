@@ -33,9 +33,28 @@ pub fn chdir(p: &path::Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Return the path to the current executable (unsupported on NeXTSTEP).
+/// Return the path to the current executable via argv[0].
+///
+/// Best-effort: if argv[0] is relative, prepends the cwd. May not reflect
+/// the true path if the binary was invoked via a bare PATH lookup.
 pub fn current_exe() -> io::Result<PathBuf> {
-    super::common::unsupported()
+    let argv = super::common::argv();
+    if argv.is_null() || super::common::argc() < 1 {
+        return super::common::unsupported();
+    }
+    let arg0_ptr = unsafe { *argv };
+    if arg0_ptr.is_null() {
+        return super::common::unsupported();
+    }
+    let arg0 = unsafe { CStr::from_ptr(arg0_ptr as *const c_char) };
+    let path = PathBuf::from(unsafe {
+        OsString::from_encoded_bytes_unchecked(arg0.to_bytes().to_vec())
+    });
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(getcwd()?.join(path))
+    }
 }
 
 /// Get the errno value.

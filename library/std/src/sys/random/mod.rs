@@ -72,10 +72,12 @@ cfg_if::cfg_if! {
     } else if #[cfg(target_os = "zkvm")] {
         mod zkvm;
         pub use zkvm::fill_bytes;
+    } else if #[cfg(target_os = "nextstep")] {
+        mod nextstep;
+        pub use nextstep::{fill_bytes, hashmap_random_keys};
     } else if #[cfg(any(
         all(target_family = "wasm", target_os = "unknown"),
         target_os = "xous",
-        target_os = "nextstep",
     ))] {
         // FIXME: finally remove std support for wasm32-unknown-unknown
         // FIXME: add random data generation to xous
@@ -87,9 +89,9 @@ cfg_if::cfg_if! {
 #[cfg(not(any(
     target_os = "linux",
     target_os = "android",
+    target_os = "nextstep",
     all(target_family = "wasm", target_os = "unknown"),
     target_os = "xous",
-    target_os = "nextstep",
 )))]
 pub fn hashmap_random_keys() -> (u64, u64) {
     let mut buf = [0; 16];
